@@ -7,15 +7,21 @@ Esses números são estimativas de referência e podem ser ajustados
 conforme cenário macroeconômico atual.
 """
 
-# Inflação média anual esperada (ex: IPCA)
+# Inflação média anual esperada (ex: IPCA) — valor de referência (fallback)
 INFLACAO_ANUAL = 0.045  # 4,5% ao ano
 
-# Retorno livre de risco (ex: Selic / CDI)
+# Retorno livre de risco (ex: Selic / CDI) — valor de referência (fallback)
 TAXA_LIVRE_RISCO_ANUAL = 0.105  # 10,5% ao ano
+
+# Data/hora da última atualização com dados reais (None = ainda não atualizado,
+# está usando os valores fixos de referência acima)
+DATA_ULTIMA_ATUALIZACAO = None
 
 # Premissas de retorno e risco (volatilidade) por classe de ativo
 # retorno_anual: retorno médio esperado ao ano (nominal)
 # volatilidade_anual: desvio padrão anual (quanto maior, mais risco)
+# Todos os valores abaixo são de referência (fallback) até que
+# atualizar_premissas() seja chamada com sucesso.
 CLASSES_ATIVOS = {
     "renda_fixa_pos": {
         "nome": "Renda Fixa Pós-fixada (CDI/Tesouro Selic)",
@@ -48,6 +54,53 @@ CLASSES_ATIVOS = {
         "volatilidade_anual": 0.13,
     },
 }
+
+
+def atualizar_premissas(mostrar_mensagem: bool = True) -> bool:
+    """
+    Tenta atualizar as premissas de mercado com dados reais (Selic, IPCA,
+    Ibovespa). Se a busca falhar (sem internet, API fora do ar, biblioteca
+    não instalada), mantém os valores de referência (fallback) e avisa —
+    o programa nunca trava por causa disso.
+
+    Retorna True se conseguiu atualizar com dados reais, False se manteve
+    o fallback.
+    """
+    global INFLACAO_ANUAL, TAXA_LIVRE_RISCO_ANUAL, DATA_ULTIMA_ATUALIZACAO
+
+    try:
+        from dados_reais import buscar_todas_premissas
+    except ImportError:
+        if mostrar_mensagem:
+            print("[Info] dados_reais.py não encontrado. Usando valores de referência.")
+        return False
+
+    dados = buscar_todas_premissas()
+    atualizou_algo = False
+
+    if dados.get("selic") is not None:
+        TAXA_LIVRE_RISCO_ANUAL = dados["selic"]
+        CLASSES_ATIVOS["renda_fixa_pos"]["retorno_anual"] = dados["selic"]
+        atualizou_algo = True
+
+    if dados.get("ipca") is not None:
+        INFLACAO_ANUAL = dados["ipca"]
+        atualizou_algo = True
+
+    if dados.get("retorno_ibovespa") is not None and dados.get("volatilidade_ibovespa") is not None:
+        CLASSES_ATIVOS["acoes_br"]["retorno_anual"] = dados["retorno_ibovespa"]
+        CLASSES_ATIVOS["acoes_br"]["volatilidade_anual"] = dados["volatilidade_ibovespa"]
+        atualizou_algo = True
+
+    if atualizou_algo:
+        DATA_ULTIMA_ATUALIZACAO = dados["data_atualizacao"]
+        if mostrar_mensagem:
+            print(f"[Info] Premissas de mercado atualizadas em {DATA_ULTIMA_ATUALIZACAO}.")
+    else:
+        if mostrar_mensagem:
+            print("[Info] Não foi possível atualizar. Usando valores de referência.")
+
+    return atualizou_algo
 
 
 def listar_classes():
@@ -89,8 +142,12 @@ def volatilidade_carteira_simplificada(alocacao: dict) -> float:
 
 def resumo_mercado() -> str:
     """Retorna um texto formatado com o cenário de mercado atual."""
+    status = (f"Premissas atualizadas em: {DATA_ULTIMA_ATUALIZACAO}"
+              if DATA_ULTIMA_ATUALIZACAO
+              else "Premissas atualizadas em: NÃO ATUALIZADO (usando valores de referência)")
     linhas = [
         "=== Premissas de Mercado ===",
+        status,
         f"Inflação anual estimada: {INFLACAO_ANUAL * 100:.2f}%",
         f"Taxa livre de risco (CDI/Selic): {TAXA_LIVRE_RISCO_ANUAL * 100:.2f}%",
         "",

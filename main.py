@@ -10,7 +10,7 @@ Para executar:
 """
 
 import sys
-from mercado import resumo_mercado
+from mercado import resumo_mercado, atualizar_premissas
 from indicadores import (
     PERGUNTAS_PERFIL,
     calcular_pontuacao,
@@ -109,6 +109,8 @@ def exibir_resultados(cliente: ClientePerfil, simulador: SimuladorFinanceiro):
 
 
 def main():
+    print("Atualizando premissas de mercado (Selic, IPCA, Ibovespa)...")
+    atualizar_premissas()
     print(resumo_mercado())
     cliente = coletar_dados_cliente()
     simulador = SimuladorFinanceiro(cliente)
@@ -116,6 +118,7 @@ def main():
     df_determ = exibir_resultados(cliente, simulador)
     print("\nExecutando simulação de Monte Carlo (isso pode levar alguns segundos)...")
     df_mc = simulador.projetar_monte_carlo(n_simulacoes=300)
+
     valor_otimista = df_mc["cenario_otimista"].iloc[-1]
     valor_esperado = df_mc["cenario_esperado"].iloc[-1]
     valor_pessimista = df_mc["cenario_pessimista"].iloc[-1]

@@ -15,6 +15,11 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.chart import LineChart, PieChart, Reference
 from openpyxl.utils import get_column_letter
 
+import mercado
+
+print("Atualizando premissas de mercado (Selic, IPCA, Ibovespa)...")
+mercado.atualizar_premissas()
+
 AZUL = Font(color="0000FF")
 PRETO = Font(color="000000")
 VERDE = Font(color="008000")
@@ -64,12 +69,8 @@ for c, h in enumerate(headers, start=1):
     cel.fill = CINZA
 
 classes = [
-    ("renda_fixa_pos", "Renda Fixa Pós-fixada (CDI / Tesouro Selic)", 0.105, 0.02),
-    ("renda_fixa_pre", "Renda Fixa Prefixada / Inflação", 0.095, 0.06),
-    ("multimercado", "Fundos Multimercado", 0.12, 0.09),
-    ("acoes_br", "Ações Brasil", 0.15, 0.22),
-    ("acoes_global", "Ações Globais", 0.13, 0.18),
-    ("fundos_imobiliarios", "Fundos Imobiliários (FIIs)", 0.11, 0.13),
+    (codigo, dados["nome"], dados["retorno_anual"], dados["volatilidade_anual"])
+    for codigo, dados in mercado.CLASSES_ATIVOS.items()
 ]
 for i, (codigo, nome, ret, vol) in enumerate(classes):
     r = 4 + i
@@ -84,13 +85,18 @@ for i, (codigo, nome, ret, vol) in enumerate(classes):
     mkt.cell(row=r, column=5, value="Estimativa própria — ajustar conforme fonte oficial").font = Font(italic=True, size=9)
 
 mkt["A11"] = "Inflação anual esperada (IPCA)"
-mkt["B11"] = 0.045
+mkt["B11"] = mercado.INFLACAO_ANUAL
 mkt["B11"].font = AZUL
 mkt["B11"].number_format = "0.0%"
 mkt["A12"] = "Taxa livre de risco (CDI / Selic)"
-mkt["B12"] = 0.105
+mkt["B12"] = mercado.TAXA_LIVRE_RISCO_ANUAL
 mkt["B12"].font = AZUL
 mkt["B12"].number_format = "0.0%"
+
+mkt["A13"] = "Última atualização com dados reais"
+status_atualizacao = mercado.DATA_ULTIMA_ATUALIZACAO or "NÃO ATUALIZADO (usando valores de referência)"
+mkt["B13"] = status_atualizacao
+mkt["B13"].font = Font(italic=True, size=9, color="808080")
 
 mkt["A14"] = ("Fonte sugerida para atualização: Banco Central do Brasil (bcb.gov.br) para "
               "CDI/Selic, e IBGE (ibge.gov.br/explica/inflacao.php) para o IPCA.")
@@ -429,5 +435,5 @@ graf_pizza.add_data(dados_pizza, titles_from_data=False)
 graf_pizza.set_categories(labels_pizza)
 res.add_chart(graf_pizza, "D22")
 
-wb.save("Simulador_Cliente.xlsx")
+wb.save("/home/claude/simulador_cliente2/Simulador_Cliente.xlsx")
 print("Arquivo Simulador_Cliente.xlsx gerado com sucesso.")

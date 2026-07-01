@@ -12,10 +12,12 @@ Para executar:
 
 import tkinter as tk
 from tkinter import ttk, messagebox
+import threading
 
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg # type: ignore
-import matplotlib.pyplot as plt # type: ignore
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
 
+import mercado
 from indicadores import (
     PERGUNTAS_PERFIL,
     calcular_pontuacao,
@@ -30,14 +32,83 @@ class SimuladorApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Simulador de Perfil do Cliente — Projeção Financeira")
-        self.geometry("950x680")
+        self.geometry("1300x700")
         self.resizable(True, True)
 
         self.respostas_vars = []
         self._construir_layout()
+        self._atualizar_mercado_async()
+
+    # ---------------- ATUALIZAÇÃO DE MERCADO (em segundo plano) ----------------
+    def _atualizar_mercado_async(self):
+        """
+        Busca dados reais de mercado (Selic, IPCA, Ibovespa) em uma thread
+        separada, para não travar a janela enquanto espera a internet.
+        """
+        self.status_mercado.set("Atualizando dados de mercado...")
+        if hasattr(self, "btn_atualizar_mercado"):
+            self.btn_atualizar_mercado.configure(state="disabled")
+
+        def tarefa():
+            sucesso = mercado.atualizar_premissas(mostrar_mensagem=False)
+            self.after(0, lambda: self._finalizar_atualizacao_mercado(sucesso))
+
+        threading.Thread(target=tarefa, daemon=True).start()
+
+    def _finalizar_atualizacao_mercado(self, sucesso: bool):
+        if sucesso:
+            texto = f"Dados de mercado atualizados em {mercado.DATA_ULTIMA_ATUALIZACAO}."
+        else:
+            texto = "Não foi possível atualizar. Usando valores de referência."
+        self.status_mercado.set(texto)
+        self._exibir_dados_mercado()
+        self.btn_atualizar_mercado.configure(state="normal")
+
+    def _exibir_dados_mercado(self):
+        """Preenche o painel 'Premissas de Mercado' com os dados atuais
+        (reais, se a atualização deu certo, ou de referência, se não)."""
+        self.texto_mercado.configure(state="normal")
+        self.texto_mercado.delete("1.0", tk.END)
+
+        if mercado.DATA_ULTIMA_ATUALIZACAO:
+            cabecalho = f"Atualizado em: {mercado.DATA_ULTIMA_ATUALIZACAO}\n(dados reais — BCB / Ibovespa)\n"
+        else:
+            cabecalho = "NÃO ATUALIZADO\n(usando valores de referência)\n"
+
+        linhas = [
+            cabecalho,
+            "",
+            f"Inflação anual estimada: {mercado.INFLACAO_ANUAL * 100:.2f}%",
+            f"Taxa livre de risco (CDI/Selic): {mercado.TAXA_LIVRE_RISCO_ANUAL * 100:.2f}%",
+            "",
+            "Classes de ativos:",
+        ]
+        for dados in mercado.CLASSES_ATIVOS.values():
+            linhas.append(
+                f"  • {dados['nome']}\n"
+                f"      retorno {dados['retorno_anual']*100:.2f}%  |  "
+                f"risco {dados['volatilidade_anual']*100:.2f}%"
+            )
+
+        self.texto_mercado.insert(tk.END, "\n".join(linhas))
+        self.texto_mercado.configure(state="disabled")
 
     # ---------------- LAYOUT ----------------
     def _construir_layout(self):
+        topo = ttk.Frame(self)
+        topo.pack(fill="x", padx=15, pady=(8, 0))
+
+        self.status_mercado = tk.StringVar(value="Iniciando...")
+        status_label = ttk.Label(topo, textvariable=self.status_mercado,
+                                  font=("Segoe UI", 8, "italic"), foreground="#555")
+        status_label.pack(side="left")
+
+        self.btn_atualizar_mercado = ttk.Button(
+            topo, text="Atualizar dados de mercado",
+            command=self._atualizar_mercado_async, state="disabled"
+        )
+        self.btn_atualizar_mercado.pack(side="right")
+
         container = ttk.Frame(self, padding=15)
         container.pack(fill="both", expand=True)
 
@@ -84,6 +155,16 @@ class SimuladorApp(tk.Tk):
         container.columnconfigure(1, weight=1)
         container.rowconfigure(0, weight=1)
 
+        # --- Coluna extra: premissas de mercado (dados reais) ---
+        mercado_frame = ttk.LabelFrame(container, text="Premissas de Mercado", padding=12)
+        mercado_frame.grid(row=0, column=2, rowspan=3, sticky="ns", padx=(10, 0))
+
+        self.texto_mercado = tk.Text(mercado_frame, width=38, height=28, wrap="word",
+                                      font=("Consolas", 9))
+        self.texto_mercado.pack(fill="both", expand=True)
+        self.texto_mercado.insert(tk.END, "Buscando dados de mercado...")
+        self.texto_mercado.configure(state="disabled")
+
         self.texto_resultado = tk.Text(resultado_frame, width=55, height=14, wrap="word")
         self.texto_resultado.pack(fill="x", pady=(0, 10))
         self.texto_resultado.configure(state="disabled")
@@ -92,7 +173,6 @@ class SimuladorApp(tk.Tk):
         self.grafico_container.pack(fill="both", expand=True)
 
     # ---------------- LÓGICA ----------------
-    
     def _ler_dados_formulario(self) -> ClientePerfil:
         nome = self.entradas["nome"].get().strip() or "Cliente"
         idade = int(self.entradas["idade"].get())
@@ -123,14 +203,7 @@ class SimuladorApp(tk.Tk):
             total_aportado = df["total_aportado"].iloc[-1]
             indicadores = resumo_indicadores(total_aportado, valor_final, cliente.prazo_anos)
 
-            df_mc = simulador.projetar_monte_carlo(n_simulacoes=300)
-            cenarios = {
-                "otimista": df_mc["cenario_otimista"].iloc[-1],
-                "esperado": df_mc["cenario_esperado"].iloc[-1],
-                "pessimista": df_mc["cenario_pessimista"].iloc[-1],
-            }
-
-            self._exibir_texto(cliente, simulador, valor_final, total_aportado, indicadores, cenarios)
+            self._exibir_texto(cliente, simulador, valor_final, total_aportado, indicadores)
             self._exibir_grafico(df)
 
         except ValueError as e:
@@ -138,7 +211,7 @@ class SimuladorApp(tk.Tk):
         except Exception as e:
             messagebox.showerror("Erro inesperado", str(e))
 
-    def _exibir_texto(self, cliente, simulador, valor_final, total_aportado, indicadores, cenarios):
+    def _exibir_texto(self, cliente, simulador, valor_final, total_aportado, indicadores):
         self.texto_resultado.configure(state="normal")
         self.texto_resultado.delete("1.0", tk.END)
         texto = (
@@ -150,10 +223,6 @@ class SimuladorApp(tk.Tk):
             f"Rendimento projetado: R$ {valor_final - total_aportado:,.2f}\n\n"
             f"Rentabilidade acumulada: {indicadores['rentabilidade_acumulada_%']:.2f}%\n"
             f"CAGR: {indicadores['cagr_%']:.2f}%  |  CAGR real: {indicadores['cagr_real_%']:.2f}%\n"
-            f"=== Cenários de Projeção (Monte Carlo) ===\n"
-            f"Cenário otimista: R$ {cenarios['otimista']:,.2f}\n"
-            f"Cenário esperado: R$ {cenarios['esperado']:,.2f}\n"
-            f"Cenário pessimista: R$ {cenarios['pessimista']:,.2f}\n"
         )
         self.texto_resultado.insert(tk.END, texto)
         self.texto_resultado.configure(state="disabled")
